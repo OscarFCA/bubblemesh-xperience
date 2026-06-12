@@ -1,0 +1,15 @@
+{
+  "name": "BubbleMesh Xperience",
+  "short_name": "Xperience",
+  "description": "Tu equipo de marketing especializado en turismo y experiencias en México.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0B0F1A",
+  "theme_color": "#0B0F1A",
+  "lang": "es-MX",
+  "icons": [
+    { "src": "assets/logo/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
