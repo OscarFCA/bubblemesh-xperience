@@ -1,7 +1,11 @@
 name: Deploy a Hostgator (producción)
 
-# Despliega a xperience.bubble-mesh.com vía FTP en cada push a la rama `production`.
-# El flujo de trabajo es:
+# Despliega a xperience.bubble-mesh.com vía la API de cPanel en cada push a `production`.
+#
+# El servicio FTP de este hosting está enjaulado en un árbol distinto al docroot real,
+# por eso el deploy usa la API de cPanel (Fileman) con un token revocable.
+#
+# Flujo de trabajo:
 #   main        -> GitHub Pages (preview/staging)
 #   production  -> Hostgator (sitio en vivo)
 
@@ -15,27 +19,56 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ftp-deploy:
+  deploy:
     runs-on: ubuntu-latest
+    env:
+      CP: "https://${{ secrets.CPANEL_HOST }}"
+      AUTH: "cpanel ${{ secrets.CPANEL_USER }}:${{ secrets.CPANEL_TOKEN }}"
+      DOCROOT: ${{ secrets.CPANEL_DOCROOT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Subir por FTP
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_HOST }}
-          username: ${{ secrets.FTP_USER }}
-          password: ${{ secrets.FTP_PASS }}
-          port: ${{ secrets.FTP_PORT }}
-          protocol: ftp
-          local-dir: ./
-          server-dir: ${{ secrets.FTP_SERVER_DIR }}
-          dangerous-clean-slate: false
-          exclude: |
-            **/.git*
-            **/.git*/**
-            **/.github/**
-            **/node_modules/**
-            README.md
-            **/.DS_Store
+      - name: Empaquetar sitio
+        run: |
+          zip -rq site.zip . \
+            -x ".git/*" ".github/*" "node_modules/*" "*.DS_Store" "README.md" "site.zip"
+          ls -lh site.zip
+
+      - name: Subir ZIP al docroot (cPanel Fileman)
+        run: |
+          RESP=$(curl -sk -H "Authorization: $AUTH" \
+            "$CP/execute/Fileman/upload_files" \
+            -F "dir=$DOCROOT" -F "file-1=@site.zip")
+          echo "$RESP"
+          echo "$RESP" | grep -q '"status":1' || { echo "Fallo en la subida"; exit 1; }
+
+      - name: Extraer y limpiar (cPanel)
+        run: |
+          # Extraer (sobrescribe)
+          curl -sk -H "Authorization: $AUTH" -G "$CP/json-api/cpanel" \
+            --data-urlencode "cpanel_jsonapi_user=${{ secrets.CPANEL_USER }}" \
+            --data-urlencode "cpanel_jsonapi_apiversion=2" \
+            --data-urlencode "cpanel_jsonapi_module=Fileman" \
+            --data-urlencode "cpanel_jsonapi_func=fileop" \
+            --data-urlencode "op=extract" \
+            --data-urlencode "sourcefiles=$DOCROOT/site.zip" \
+            --data-urlencode "destfiles=$DOCROOT" \
+            --data-urlencode "doubledecode=0" | grep -q '"result":1' \
+            && echo "Extracción OK" || { echo "Fallo al extraer"; exit 1; }
+          # Borrar el ZIP del servidor
+          curl -sk -H "Authorization: $AUTH" -G "$CP/json-api/cpanel" \
+            --data-urlencode "cpanel_jsonapi_user=${{ secrets.CPANEL_USER }}" \
+            --data-urlencode "cpanel_jsonapi_apiversion=2" \
+            --data-urlencode "cpanel_jsonapi_module=Fileman" \
+            --data-urlencode "cpanel_jsonapi_func=fileop" \
+            --data-urlencode "op=unlink" \
+            --data-urlencode "sourcefiles=$DOCROOT/site.zip" >/dev/null
+          echo "Deploy completado."
+
+      - name: Verificar sitio en vivo
+        run: |
+          sleep 3
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" https://xperience.bubble-mesh.com/)
+          echo "https://xperience.bubble-mesh.com -> HTTP $CODE"
+          [ "$CODE" = "200" ] || exit 1
